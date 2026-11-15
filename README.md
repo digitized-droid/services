@@ -15,7 +15,7 @@ The site is configured to use the new, separate Descanso Supabase project URL an
 
 1. In the new Supabase project, open **Authentication → Users** and create the cafe administrator account. Disable public sign-ups in Auth settings if the website only needs one administrator.
 2. Copy the admin user's UUID.
-3. Open `supabase/setup.sql`, replace `ADMIN_USER_UUID` with that UUID (keep the single quotes), and run the SQL in Supabase SQL Editor.
+3. Open `supabase/setup.sql`, replace `ADMIN_USER_UUID` with that UUID (keep the single quotes), and run the entire SQL script in Supabase SQL Editor. This script creates both the website content table and the `menu-images` Storage bucket with owner-only photo write policies.
 4. Deploy the entire folder to a static host (GitHub Pages, Netlify, etc.) using HTTPS.
 5. Visit the deployed website while online. Use **Admin** to sign in. Save the initial content once to publish the default packages/menu to the cloud.
 6. In Supabase, open **Authentication → URL Configuration**. Set **Site URL** to the deployed website's base URL, and add the deployed page URL to **Redirect URLs** (the same origin and path used to open `index.html`). The website requests password-recovery redirects back to that page with `?admin-reset=1`; Supabase must allow the page URL. For local testing, also allow the local development URL you use (for example `http://localhost:5500/**`).
@@ -48,4 +48,4 @@ The 50 theme definitions are stored in `themes.js`. The numbered logo images are
 
 
 ## Direct cloud image uploads
-The updated editor compresses a selected menu photo in memory, uploads the JPEG directly to the public `menu-images` Supabase Storage bucket, and stores only the returned URL in the `descanso_site.content` JSON. It no longer writes new image data into localStorage or embeds image bytes in the content row. Existing embedded data-URL photos are migrated to Storage the next time the administrator saves the website. Run the updated `supabase/setup.sql` to create the bucket and its policies (replace `ADMIN_USER_UUID` in both places with the cafe admin UUID).
+The updated editor compresses a selected menu photo in memory, uploads the JPEG directly to the public `menu-images` Supabase Storage bucket, and stores only the returned URL in the `descanso_site.content` JSON. It no longer writes new image data into localStorage or embeds image bytes in the content row. Existing embedded data-URL photos are migrated to Storage the next time the administrator saves the website. The `supabase/setup.sql` script creates the bucket and its policies together with the content table. If you previously ran an older setup script, run the updated full script once to add the missing bucket and apply the current policies.
