@@ -20,9 +20,13 @@ const defaults={
 };
 let content=readLocal();content.menuImages=content.menuImages||{};content.menuDescriptions=content.menuDescriptions||{};let supa=null, session=null, recoveryMode=false, activeCategory=Object.keys(content.menu||{})[0]||'', galleryShown=12;
 const $=id=>document.getElementById(id);
+// Local browser storage is an optional cache, never a prerequisite for cloud access.
+function storageGet(key){try{return window.localStorage.getItem(key)}catch(error){console.warn('Local storage read unavailable:',error);return null}}
+function storageSet(key,value){try{window.localStorage.setItem(key,value);return true}catch(error){console.warn('Local storage write unavailable:',error);return false}}
+function storageRemove(key){try{window.localStorage.removeItem(key);return true}catch(error){console.warn('Local storage cleanup unavailable:',error);return false}}
 function clone(x){return JSON.parse(JSON.stringify(x))}
-function readLocal(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY))||clone(defaults)}catch{return clone(defaults)}}
-function saveLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(content));localStorage.setItem(PENDING_KEY,'1')}
+function readLocal(){try{return JSON.parse(storageGet(STORAGE_KEY))||clone(defaults)}catch{return clone(defaults)}}
+function saveLocal(){const saved=storageSet(STORAGE_KEY,JSON.stringify(content));if(saved)storageSet(PENDING_KEY,'1');return saved}
 function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
 function status(msg,good=true){$('syncStatus').innerHTML=`<span class="dot" style="background:${good?'#78916c':'#c28b55'}"></span><span>${msg}</span>`}
 function escapeHTML(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -167,11 +171,11 @@ function themeById(id){return Number(id)===0?MONO_THEME:(THEMES.find(t=>t.id===N
 function readableText(hex){const value=String(hex||'#ffffff').replace('#','');if(!/^[0-9a-f]{6}$/i.test(value))return '#111111';const parts=[0,2,4].map(i=>parseInt(value.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4));const luminance=.2126*parts[0]+.7152*parts[1]+.0722*parts[2];return luminance>.42?'#171717':'#FFFFFF'}
 function applyTheme(id,persist=true){const t=themeById(id);const c=t.colors,r=document.documentElement;const isDark=readableText(c.Background)==='#FFFFFF';const onHeader=readableText(c.Header),onCard=readableText(c.Card),onSoft=readableText(c.Soft),onAccent=readableText(c.Accent);const vars={'--theme-header':c.Header,'--theme-bg':c.Background,'--theme-card':c.Card,'--theme-text':c['Primary Text'],'--theme-muted':c['Muted Text'],'--theme-accent':c.Accent,'--theme-accent-text':onAccent,'--theme-border':c.Border,'--theme-soft':c.Soft,'--theme-on-header':onHeader,'--theme-on-header-muted':onHeader==='#FFFFFF'?'#E8E8E8':'#555555','--theme-on-card':onCard,'--theme-on-soft':onSoft,'--theme-on-accent':onAccent};Object.entries(vars).forEach(([k,v])=>r.style.setProperty(k,v));r.style.colorScheme=readableText(c.Background)==='#FFFFFF'?'dark':'light';document.querySelector('meta[name="theme-color"]')?.setAttribute('content',c.Header);
  const logoPath=`logos/${t.id}.png`;['brandLogo','venueLogo','footerLogo'].forEach(id=>{const el=$(id);if(el){el.onerror=()=>{el.onerror=null;el.src='logos/1.png'};el.src=logoPath}});
- const select=$('themeSelect');if(select)select.value=String(t.id);$('themeName').textContent=t.name;$('themeCollection').textContent=t.collection;$('themeNumber').textContent=t.id===0?'DEFAULT / 51':' '+String(t.id).padStart(2,'0')+' / 50';$('themeSwatches').innerHTML=[c.Header,c.Background,c.Card,c.Accent,c.Soft].map(color=>`<span style="background:${color}"></span>`).join('');if(persist)localStorage.setItem(THEME_KEY,String(t.id));}
+ const select=$('themeSelect');if(select)select.value=String(t.id);$('themeName').textContent=t.name;$('themeCollection').textContent=t.collection;$('themeNumber').textContent=t.id===0?'DEFAULT / 51':' '+String(t.id).padStart(2,'0')+' / 50';$('themeSwatches').innerHTML=[c.Header,c.Background,c.Card,c.Accent,c.Soft].map(color=>`<span style="background:${color}"></span>`).join('');if(persist)storageSet(THEME_KEY,String(t.id));}
 function currentAdminThemeVersion(){return content.adminThemeVersion||'initial'}
-function syncThemeFromCloud(){const version=currentAdminThemeVersion();const seen=localStorage.getItem(THEME_VERSION_KEY);if(seen!==version){localStorage.setItem(THEME_KEY,String(Number(content.adminThemeId)||0));localStorage.setItem(THEME_VERSION_KEY,version);applyTheme(content.adminThemeId||0,false);return}const local=localStorage.getItem(THEME_KEY);applyTheme(local===null?(content.adminThemeId||0):Number(local),false)}
-async function publishGlobalTheme(id){if(!session||!supa){toast('Only the administrator can publish the website theme.');return}content.adminThemeId=Number(id);content.adminThemeVersion=new Date().toISOString();localStorage.setItem(THEME_KEY,String(id));localStorage.setItem(THEME_VERSION_KEY,content.adminThemeVersion);applyTheme(id,false);const {error}=await supa.from('descanso_site').update({content,updated_at:new Date().toISOString()}).eq('id',1);if(error){status('Could not publish the global theme',false);toast('Theme was not published. Please try again.');console.error(error);return}localStorage.setItem(STORAGE_KEY,JSON.stringify(content));toast('Official theme updated for all visitors.');}
-function setupThemes(){const select=$('themeSelect');if(!select)return;select.innerHTML=`<option value="0">00 · Black &amp; White — Default</option>`+THEMES.map(t=>`<option value="${t.id}">${String(t.id).padStart(2,'0')} · ${escapeHTML(t.name)} — ${escapeHTML(t.collection)}</option>`).join('');const stored=localStorage.getItem(THEME_KEY);const saved=stored===null?(content.adminThemeId||0):Number(stored);applyTheme(saved,false);select.addEventListener('change',()=>applyTheme(select.value,false));$('themeOpen').addEventListener('click',()=>$('themeModal').hidden=false);$('themeClose').addEventListener('click',()=>$('themeModal').hidden=true);$('themeModal').addEventListener('click',e=>{if(e.target===$('themeModal'))$('themeModal').hidden=true});$('applyTheme').addEventListener('click',()=>{applyTheme(select.value,true);localStorage.setItem(THEME_VERSION_KEY,currentAdminThemeVersion());$('themeModal').hidden=true;toast('Your personal theme is saved on this device.')});$('resetTheme').addEventListener('click',()=>{const official=content.adminThemeId||0;applyTheme(official,true);localStorage.setItem(THEME_VERSION_KEY,currentAdminThemeVersion());toast('Official website theme restored on this device.')});const publish=$('publishGlobalTheme');if(publish)publish.addEventListener('click',async()=>{await publishGlobalTheme(select.value);$('themeModal').hidden=true});} 
+function syncThemeFromCloud(){const version=currentAdminThemeVersion();const seen=storageGet(THEME_VERSION_KEY);if(seen!==version){storageSet(THEME_KEY,String(Number(content.adminThemeId)||0));storageSet(THEME_VERSION_KEY,version);applyTheme(content.adminThemeId||0,false);return}const local=storageGet(THEME_KEY);applyTheme(local===null?(content.adminThemeId||0):Number(local),false)}
+async function publishGlobalTheme(id){if(!session||!supa){toast('Only the administrator can publish the website theme.');return}content.adminThemeId=Number(id);content.adminThemeVersion=new Date().toISOString();storageSet(THEME_KEY,String(id));storageSet(THEME_VERSION_KEY,content.adminThemeVersion);applyTheme(id,false);const {error}=await supa.from('descanso_site').update({content,updated_at:new Date().toISOString()}).eq('id',1);if(error){status('Could not publish the global theme',false);toast('Theme was not published. Please try again.');console.error(error);return}storageSet(STORAGE_KEY,JSON.stringify(content));toast('Official theme updated for all visitors.');}
+function setupThemes(){const select=$('themeSelect');if(!select)return;select.innerHTML=`<option value="0">00 · Black &amp; White — Default</option>`+THEMES.map(t=>`<option value="${t.id}">${String(t.id).padStart(2,'0')} · ${escapeHTML(t.name)} — ${escapeHTML(t.collection)}</option>`).join('');const stored=storageGet(THEME_KEY);const saved=stored===null?(content.adminThemeId||0):Number(stored);applyTheme(saved,false);select.addEventListener('change',()=>applyTheme(select.value,false));$('themeOpen').addEventListener('click',()=>$('themeModal').hidden=false);$('themeClose').addEventListener('click',()=>$('themeModal').hidden=true);$('themeModal').addEventListener('click',e=>{if(e.target===$('themeModal'))$('themeModal').hidden=true});$('applyTheme').addEventListener('click',()=>{applyTheme(select.value,true);storageSet(THEME_VERSION_KEY,currentAdminThemeVersion());$('themeModal').hidden=true;toast('Your personal theme is saved on this device.')});$('resetTheme').addEventListener('click',()=>{const official=content.adminThemeId||0;applyTheme(official,true);storageSet(THEME_VERSION_KEY,currentAdminThemeVersion());toast('Official website theme restored on this device.')});const publish=$('publishGlobalTheme');if(publish)publish.addEventListener('click',async()=>{await publishGlobalTheme(select.value);$('themeModal').hidden=true});} 
 async function ensureSupabaseLibrary(){
  if(window.supabase?.createClient)return;
  await new Promise((resolve,reject)=>{
@@ -207,15 +211,15 @@ async function pullCloud(){
  const {data,error}=await supa.from('descanso_site').select('content').eq('id',1).maybeSingle();
  if(error){status('Local mode · cloud setup needed',false);return}
  if(data?.content&&Object.keys(data.content).length){
-  if(localStorage.getItem(PENDING_KEY)==='1'){await pushCloud();return}
-  content={...clone(defaults),...data.content};content.menuImages=content.menuImages||{};content.menuDescriptions=content.menuDescriptions||{};activeCategory=Object.keys(content.menu||{})[0]||'';localStorage.setItem(STORAGE_KEY,JSON.stringify(content));syncThemeFromCloud();render();status('Cloud content loaded');
+  if(storageGet(PENDING_KEY)==='1'){await pushCloud();return}
+  content={...clone(defaults),...data.content};content.menuImages=content.menuImages||{};content.menuDescriptions=content.menuDescriptions||{};activeCategory=Object.keys(content.menu||{})[0]||'';const cached=storageSet(STORAGE_KEY,JSON.stringify(content));syncThemeFromCloud();render();status(cached?'Cloud content loaded':'Cloud content loaded · local cache unavailable');
  }else status('Cloud ready · publish initial content after setup');
 }
 async function pushCloud(){
- if(!supa||!session||!navigator.onLine){status('Saved on this device · waiting for connection',false);return}
+ if(!supa||!session||!navigator.onLine){status('Saved on this device · waiting for connection',false);return false}
  const {error}=await supa.from('descanso_site').update({content,updated_at:new Date().toISOString()}).eq('id',1);
- if(error){status('Saved locally · cloud sync needs attention',false);console.error(error);return}
- localStorage.removeItem(PENDING_KEY);status('All changes synced');toast('Changes saved and synced to cloud.');
+ if(error){status('Saved locally · cloud sync needs attention',false);console.error(error);return false}
+ storageRemove(PENDING_KEY);status('All changes synced');toast('Changes saved and synced to cloud.');return true;
 }
 const IMAGE_BUCKET='menu-images';
 async function uploadMenuImageBlob(blob,category,item){
@@ -257,7 +261,7 @@ async function login(){
  const {data,error}=await supa.auth.signInWithPassword({email:$('adminEmail').value.trim(),password:$('adminPassword').value});
  if(error){$('loginMessage').textContent='We could not sign you in. Please check your email and password.';return}
  session=data.session;updateAdminView();$('loginMessage').textContent='';
- if(localStorage.getItem(PENDING_KEY)==='1')await pushCloud();
+ if(storageGet(PENDING_KEY)==='1')await pushCloud();
 }
 async function sendPasswordRecovery(){
  const email=$('recoveryEmail').value.trim();$('recoveryMessage').textContent='';
@@ -313,9 +317,18 @@ async function saveEditor(){
   }
  }catch(error){console.error('Legacy photo migration failed:',error);$('saveMessage').textContent='A photo could not be moved to cloud storage: '+(error.message||'Please check the connection and try again.');return}
  content=next;
- try{saveLocal()}catch(error){console.error('Local save failed:',error);$('saveMessage').textContent='Your changes could not be saved on this device because its storage is full. Try using fewer or smaller photos.';status('Device storage full · changes not saved',false);return}
- render();$('saveMessage').textContent='Your changes are saved on this device.';
- if(navigator.onLine&&session)await pushCloud();else status('Saved locally · will sync when online',false);
+ const locallyCached=saveLocal();
+ render();
+ if(navigator.onLine&&session){
+  const synced=await pushCloud();
+  $('saveMessage').textContent=synced?'Your changes were saved to the cloud.':'Cloud sync did not complete. Please check the connection and try again.';
+ }else if(locallyCached){
+  $('saveMessage').textContent='Your changes are saved on this device and will sync when online.';
+  status('Saved locally · will sync when online',false);
+ }else{
+  $('saveMessage').textContent='This browser has no space for an offline copy. Connect to the internet and sign in so changes can be saved directly to the cloud.';
+  status('Local cache full · cloud sync required',false);
+ }
 }
 function renumberMenuItems(card){[...card.querySelectorAll('.menu-item-editor')].forEach((row,index)=>{const heading=row.querySelector('.menu-food-heading strong');if(heading)heading.textContent=`Dish ${index+1}`})}
 function addFoodItem(card){const list=card.querySelector('.menu-item-editor-list');const row=document.createElement('article');row.className='menu-item-editor';row.innerHTML=`<div class="menu-food-heading"><strong>Dish ${list.querySelectorAll('.menu-item-editor').length+1}</strong><button type="button" class="text-link remove-menu-item">Remove food</button></div><div class="menu-food-fields"><label class="menu-food-name-field">Food name<input class="menu-item-name" placeholder="Enter food name"></label><label class="menu-food-photo-field">Food photo<input class="menu-item-image" type="file" accept="image/*"><span class="field-note">No photo uploaded yet · choose an image for this dish</span></label><label class="menu-item-description">Food description <span class="field-note">Write the actual ingredients, flavor, or details visitors should know.</span><textarea class="menu-item-description-input" rows="3" placeholder="Example: Tender pork simmered in a rich tomato sauce with potatoes, carrots, and bell peppers."></textarea></label></div>`;list.appendChild(row);renumberMenuItems(card)}
@@ -390,7 +403,7 @@ $('menuEditor').addEventListener('change',async e=>{
 });
 $('logoutButton').addEventListener('click',async()=>{if(supa)await supa.auth.signOut();session=null;updateAdminView()});
 $('loadMore').addEventListener('click',()=>{galleryShown=Math.min(galleryShown+12,GALLERY_PHOTOS.length);renderGallery()});
-window.addEventListener('online',async()=>{status('Back online');if(session&&localStorage.getItem(PENDING_KEY)==='1')await pushCloud();else await pullCloud()});
+window.addEventListener('online',async()=>{status('Back online');if(session&&storageGet(PENDING_KEY)==='1')await pushCloud();else await pullCloud()});
 window.addEventListener('offline',()=>status('Offline · local content available',false));
 setupThemes();render();status(navigator.onLine?'Starting…':'Offline · local content available',navigator.onLine);
 connectCloud().catch(e=>{console.error('Cloud initialization failed:',e);status('Local mode · cloud unavailable: '+(e.message||'check connection'),false)});
