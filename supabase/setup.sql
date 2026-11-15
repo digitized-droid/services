@@ -38,3 +38,37 @@ begin
     alter publication supabase_realtime add table public.descanso_site;
   end if;
 end $$;
+
+
+-- Menu photos live in Supabase Storage, not localStorage or the JSON content row.
+-- Replace ADMIN_USER_UUID with the same administrator UUID used above.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('menu-images', 'menu-images', true, 10485760, array['image/jpeg'])
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Public can view cafe menu photos" on storage.objects;
+create policy "Public can view cafe menu photos"
+on storage.objects for select
+to anon, authenticated
+using (bucket_id = 'menu-images');
+
+drop policy if exists "Cafe admin can upload menu photos" on storage.objects;
+create policy "Cafe admin can upload menu photos"
+on storage.objects for insert
+to authenticated
+with check (
+  bucket_id = 'menu-images'
+  and auth.uid() = 'ADMIN_USER_UUID'::uuid
+);
+
+drop policy if exists "Cafe admin can delete menu photos" on storage.objects;
+create policy "Cafe admin can delete menu photos"
+on storage.objects for delete
+to authenticated
+using (
+  bucket_id = 'menu-images'
+  and auth.uid() = 'ADMIN_USER_UUID'::uuid
+);
