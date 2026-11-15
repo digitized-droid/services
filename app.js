@@ -172,10 +172,29 @@ function currentAdminThemeVersion(){return content.adminThemeVersion||'initial'}
 function syncThemeFromCloud(){const version=currentAdminThemeVersion();const seen=localStorage.getItem(THEME_VERSION_KEY);if(seen!==version){localStorage.setItem(THEME_KEY,String(Number(content.adminThemeId)||0));localStorage.setItem(THEME_VERSION_KEY,version);applyTheme(content.adminThemeId||0,false);return}const local=localStorage.getItem(THEME_KEY);applyTheme(local===null?(content.adminThemeId||0):Number(local),false)}
 async function publishGlobalTheme(id){if(!session||!supa){toast('Only the administrator can publish the website theme.');return}content.adminThemeId=Number(id);content.adminThemeVersion=new Date().toISOString();localStorage.setItem(THEME_KEY,String(id));localStorage.setItem(THEME_VERSION_KEY,content.adminThemeVersion);applyTheme(id,false);const {error}=await supa.from('descanso_site').update({content,updated_at:new Date().toISOString()}).eq('id',1);if(error){status('Could not publish the global theme',false);toast('Theme was not published. Please try again.');console.error(error);return}localStorage.setItem(STORAGE_KEY,JSON.stringify(content));toast('Official theme updated for all visitors.');}
 function setupThemes(){const select=$('themeSelect');if(!select)return;select.innerHTML=`<option value="0">00 · Black &amp; White — Default</option>`+THEMES.map(t=>`<option value="${t.id}">${String(t.id).padStart(2,'0')} · ${escapeHTML(t.name)} — ${escapeHTML(t.collection)}</option>`).join('');const stored=localStorage.getItem(THEME_KEY);const saved=stored===null?(content.adminThemeId||0):Number(stored);applyTheme(saved,false);select.addEventListener('change',()=>applyTheme(select.value,false));$('themeOpen').addEventListener('click',()=>$('themeModal').hidden=false);$('themeClose').addEventListener('click',()=>$('themeModal').hidden=true);$('themeModal').addEventListener('click',e=>{if(e.target===$('themeModal'))$('themeModal').hidden=true});$('applyTheme').addEventListener('click',()=>{applyTheme(select.value,true);localStorage.setItem(THEME_VERSION_KEY,currentAdminThemeVersion());$('themeModal').hidden=true;toast('Your personal theme is saved on this device.')});$('resetTheme').addEventListener('click',()=>{const official=content.adminThemeId||0;applyTheme(official,true);localStorage.setItem(THEME_VERSION_KEY,currentAdminThemeVersion());toast('Official website theme restored on this device.')});const publish=$('publishGlobalTheme');if(publish)publish.addEventListener('click',async()=>{await publishGlobalTheme(select.value);$('themeModal').hidden=true});} 
+async function ensureSupabaseLibrary(){
+ if(window.supabase?.createClient)return;
+ await new Promise((resolve,reject)=>{
+  const script=document.createElement('script');
+  script.src='https://unpkg.com/@supabase/supabase-js@2';
+  script.onload=()=>window.supabase?.createClient?resolve():reject(new Error('Supabase library did not initialize'));
+  script.onerror=()=>reject(new Error('Could not load Supabase JavaScript from either CDN. Check Safari content blockers, DNS, or network access.'));
+  document.head.appendChild(script);
+  setTimeout(()=>reject(new Error('Timed out loading Supabase JavaScript')),12000);
+ });
+}
+async function withCloudTimeout(promise,label,ms=15000){
+ let timer;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+' timed out. Check the connection and try again.')),ms)})])}
+ finally{clearTimeout(timer)}
+}
 async function connectCloud(){
- if(!window.supabase||!window.DESCANSO_SUPABASE_URL||!window.DESCANSO_SUPABASE_PUBLISHABLE_KEY){status('Local mode · cloud library not loaded',false);return}
- supa=window.supabase.createClient(window.DESCANSO_SUPABASE_URL,window.DESCANSO_SUPABASE_PUBLISHABLE_KEY);
- const {data:{session:s}}=await supa.auth.getSession();session=s;
+ if(!window.DESCANSO_SUPABASE_URL||!window.DESCANSO_SUPABASE_PUBLISHABLE_KEY){status('Local mode · Supabase configuration missing',false);return}
+ await ensureSupabaseLibrary();
+ supa=window.supabase.createClient(window.DESCANSO_SUPABASE_URL,window.DESCANSO_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+ const {data:{session:s},error:sessionError}=await withCloudTimeout(supa.auth.getSession(),'Supabase sign-in check');
+ if(sessionError)throw sessionError;
+ session=s;
  supa.auth.onAuthStateChange((event,s)=>{session=s;if(event==='SIGNED_OUT'){recoveryMode=false;showAuthPanel('loginFormView');}updateAdminView()});
  const hashParams=new URLSearchParams(window.location.hash.replace(/^#/,'&'));
  if(hashParams.get('error')){$('adminModal').hidden=false;showAuthPanel('forgotPasswordView');$('recoveryMessage').textContent=hashParams.get('error_description')||'This recovery link is invalid or expired. Please request a new one.';}
@@ -197,6 +216,30 @@ async function pushCloud(){
  const {error}=await supa.from('descanso_site').update({content,updated_at:new Date().toISOString()}).eq('id',1);
  if(error){status('Saved locally · cloud sync needs attention',false);console.error(error);return}
  localStorage.removeItem(PENDING_KEY);status('All changes synced');toast('Changes saved and synced to cloud.');
+}
+const IMAGE_BUCKET='menu-images';
+async function uploadMenuImageBlob(blob,category,item){
+ if(!supa||!session)throw new Error('Please sign in as the website administrator before uploading photos.');
+ if(!navigator.onLine)throw new Error('An internet connection is required to upload a photo directly to the cloud.');
+ const safePart=value=>String(value||'item').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48)||'item';
+ const unique=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+ const path=`menu/${safePart(category)}/${safePart(item)}-${unique}.jpg`;
+ const {data,error}=await withCloudTimeout(supa.storage.from(IMAGE_BUCKET).upload(path,blob,{contentType:'image/jpeg',cacheControl:'31536000',upsert:false}),'Photo upload',60000);
+ if(error)throw error;
+ const {data:{publicUrl}}=supa.storage.from(IMAGE_BUCKET).getPublicUrl(data.path);
+ return publicUrl;
+}
+async function migrateEmbeddedMenuImages(images){
+ for(const category of Object.keys(images||{})){
+  for(const item of Object.keys(images[category]||{})){
+   const value=images[category][item];
+   if(typeof value==='string'&&value.startsWith('data:image/')){
+    const response=await fetch(value);
+    const blob=await response.blob();
+    images[category][item]=await uploadMenuImageBlob(blob,category,item);
+   }
+  }
+ }
 }
 function renderAdminEditor(){
  $('editCafeName').value=content.cafeName||'';$('editIntro').value=content.intro||'';$('editCapacity').value=content.venueCapacity||100;
@@ -263,6 +306,12 @@ async function saveEditor(){
  if(!next.packages.length){$('saveMessage').textContent='Please keep at least one event package.';return}
  if(!Object.keys(next.menu).length){$('saveMessage').textContent='Please keep at least one menu category.';return}
  if(next.packages.some(p=>!p.name||!p.price)){$('saveMessage').textContent='Please add a name and price to every package.';return}
+ try{
+  if(Object.values(next.menuImages||{}).some(group=>Object.values(group||{}).some(value=>typeof value==='string'&&value.startsWith('data:image/')))){
+   $('saveMessage').textContent='Moving existing photos to cloud storage…';
+   await migrateEmbeddedMenuImages(next.menuImages);
+  }
+ }catch(error){console.error('Legacy photo migration failed:',error);$('saveMessage').textContent='A photo could not be moved to cloud storage: '+(error.message||'Please check the connection and try again.');return}
  content=next;
  try{saveLocal()}catch(error){console.error('Local save failed:',error);$('saveMessage').textContent='Your changes could not be saved on this device because its storage is full. Try using fewer or smaller photos.';status('Device storage full · changes not saved',false);return}
  render();$('saveMessage').textContent='Your changes are saved on this device.';
@@ -297,7 +346,7 @@ async function compressFoodImage(file){
    if(canvas.toBlob)canvas.toBlob(result=>result?resolve(result):reject(new Error('Could not compress this photo. Please try another image.')),'image/jpeg',.70);
    else{try{const data=canvas.toDataURL('image/jpeg',.70),bytes=atob(data.split(',')[1]),array=new Uint8Array(bytes.length);for(let i=0;i<bytes.length;i++)array[i]=bytes.charCodeAt(i);resolve(new Blob([array],{type:'image/jpeg'}))}catch(error){reject(error)}}
   });
-  return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Could not finish preparing this photo. Please try again.'));reader.readAsDataURL(blob)});
+  return blob;
  }finally{if(bitmap)bitmap.close();if(objectUrl)URL.revokeObjectURL(objectUrl)}
 }
 function addPackage(){content.packages.push({name:'New package',tag:'',price:'',unit:'',minimum:'',capacity:`Venue capacity: ${content.venueCapacity||100} guests`,description:'',inclusions:[]});renderAdminEditor()}
@@ -325,11 +374,13 @@ $('menuEditor').addEventListener('change',async e=>{
  const file=input.files[0],row=input.closest('.menu-item-editor'),card=input.closest('.menu-edit-item');
  const oldCategory=input.dataset.category||card.dataset.originalCategory,oldItem=input.dataset.item||row.querySelector('.menu-item-name').value.trim(),note=input.parentElement.querySelector('.field-note');
  try{
-  input.disabled=true;$('saveMessage').textContent='Preparing photo…';if(note)note.textContent='Preparing photo for upload…';
-  const data=await compressFoodImage(file),category=card.querySelector('.menu-category-name').value.trim()||oldCategory,item=row.querySelector('.menu-item-name').value.trim()||oldItem;
+  input.disabled=true;$('saveMessage').textContent='Preparing photo…';if(note)note.textContent='Preparing photo…';
+  const blob=await compressFoodImage(file),category=card.querySelector('.menu-category-name').value.trim()||oldCategory,item=row.querySelector('.menu-item-name').value.trim()||oldItem;
+  $('saveMessage').textContent='Uploading photo directly to cloud…';if(note)note.textContent='Uploading directly to cloud…';
+  const data=await uploadMenuImageBlob(blob,category,item);
   content.menuImages=content.menuImages||{};content.menuImages[category]=content.menuImages[category]||{};if(item)content.menuImages[category][item]=data;
   input.dataset.category=category;input.dataset.item=item;input.dataset.uploadedImage=data;
-  if(note)note.textContent='Photo ready · select Save website changes to publish it';
+  if(note)note.textContent='Photo uploaded to cloud · select Save website changes to publish it';
   let preview=row.querySelector('.admin-food-preview');if(!preview){preview=document.createElement('img');preview.className='admin-food-preview';preview.alt=item+' preview';input.parentElement.appendChild(preview)}
   preview.src=data;$('saveMessage').textContent='Photo prepared successfully. Select Save website changes to publish it.';
  }catch(err){
@@ -342,6 +393,6 @@ $('loadMore').addEventListener('click',()=>{galleryShown=Math.min(galleryShown+1
 window.addEventListener('online',async()=>{status('Back online');if(session&&localStorage.getItem(PENDING_KEY)==='1')await pushCloud();else await pullCloud()});
 window.addEventListener('offline',()=>status('Offline · local content available',false));
 setupThemes();render();status(navigator.onLine?'Starting…':'Offline · local content available',navigator.onLine);
-connectCloud().catch(e=>{console.error(e);status('Local mode · cloud connection unavailable',false)});
+connectCloud().catch(e=>{console.error('Cloud initialization failed:',e);status('Local mode · cloud unavailable: '+(e.message||'check connection'),false)});
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js').catch(console.warn));
 })();
